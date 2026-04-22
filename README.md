@@ -5,9 +5,8 @@ El objetivo del trabajo y del código generado es analizar la composición taxon
 
 
 * Carpeta "bash":
-En esta carpeta encontramos los archivos *** para realizar: ***
+En esta carpeta encontramos los archivos run_fastp.sh, run_fastqc_inicial.sh, run_fastqc_final.sh, run_kneaddata.sh, run_metaphlan.sh, run_humann.sh para realizar los primeros pasos del procesamiento de archivos de lecturas shot-gun.  
 En esta carpeta también encontramos un ejemplo de resultados de MultiQC en una carpeta a parte.
 
 * Carpeta "R":
-En esta carpeta se encuentra el código generado en el lenguaje de programación R. Incluye *** 
-También encontramos el archivo HTML con el código y los resultados obtenidos de ambos archivos.
+En esta carpeta se encuentra el código generado en el lenguaje de programación R. Incluye diversity_alpha_index_R.rmd, diversity_beta_index.R.rmd (análisis taxonómico de diversidad), differential_pathways.rmd y differential_genefamilies.rmd (análisis funcional de los archivos resultantes de HUMAnN). 
