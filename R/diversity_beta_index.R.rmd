@@ -1,0 +1,147 @@
+Este código se ha implementado para evaluar la diversidad beta 
+con archivos resultantes de MetaphIan. Se parte de la matriz de 
+abundancia obtenida mediante merge_metaphlan_tables.py,  
+que reúne todos los niveles jerárquicos y sus respectivas abundancias 
+relativas de todas las muestras. 
+
+# Instalación de paquetes necesarios
+```{r}
+# Repositorio CRAN
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+if(!require("vegan", quietly = TRUE))
+  install.packages("vegan")
+if(!require("tidyverse", quietly = TRUE))
+  install.packages("tidyverse")
+
+  # Bioconductor
+if(!require("phyloseq", quietly = TRUE))
+  BiocManager::install("phyloseq")
+```
+
+# Cargar librerías 
+```{r}
+library(vegan)
+library(tidyverse)
+library(phyloseq)
+```
+
+# Establecer directorio de trabajo
+```{r}
+setwd("../metaphian")
+```
+
+# Leer archivos necesarios, transformación a un formato adecuado y pre-filtrado
+```{r}
+# Tabla de abundancias de metaPhIAn
+otu_table <- read.table("merged_table.txt",
+                        header = TRUE,
+                        sep = "\t",
+                        row.names = 1, 
+                        check.names = FALSE)
+
+# Tabla de metadatos 
+metadata <- read.table("../../metadata/metadata.txt", 
+                       header = TRUE, 
+                       sep = "\t", 
+                       fill = TRUE)
+metadata <- metadata[-nrow(metadata),]
+metadata_ready <- metadata[order(metadata[,18]),]
+
+# Filtrar especies y géneros
+otu_species <- otu_table[grepl("s__", rownames(otu_table)), ]
+otu_genus <- otu_table[grepl("g__", rownames(otu_table)) & !grepl("s__", rownames(otu_table)), ] # se eliminan las que lleguen a nivel de especie porque si no, se estaría contabilizando el doble en diversidad
+
+# Eliminar especies con abundancia casi nula
+otu_species <- otu_species[rowSums(otu_species) > 0.001, ]
+otu_genus <- otu_genus[rowSums(otu_genus) > 0.001, ]
+
+# Trasponer las tablas (necesario para funciones de beta diversity)
+otu_species_t <- t(otu_species)
+otu_genus_t <- t(otu_genus)
+
+# Convertir a matriz numérica (para evitar errores posteriores)
+otu_species_t <- as.matrix(otu_species_t)
+otu_genus_t <- as.matrix(otu_genus_t)
+
+```
+
+
+# Cálculo de distancias de Bray-Curtis: la función de vegdist crea una matriz de distancias entre muestras. Se aplica un análisis de coordenadas principales (PCoA) para representar la variación en la composición microbiana reducida a dos dimensiones y facilitar la visualización de patrones de agrupamiento entre las muestras.
+```{r}
+# Matriz de distancias de Bray Curtis 
+dist_bray_curtis <- vegdist(otu_species_t, method = "bray")
+
+# Análisis de coordenadas principales con cmdscale y creación de data frames necesarios para los gráficos
+pcoa <- cmdscale(dist_bray_curtis, eig = TRUE, k = 2)
+pcoa_df <- data.frame(
+  PC1 = pcoa$points[,1],
+  PC2 = pcoa$points[,2],
+  Group = metadata_ready$clinical_cohort
+)
+pcoa_df_2 <- data.frame(
+  PC1 = pcoa$points[,1],
+  PC2 = pcoa$points[,2],
+  Group = metadata_ready$clinical_cohort_2
+)
+
+# Paleta de colores empleada
+group_colors <- c("control" = "#9BB874", "mild" = "#EBBA73", "severe" = "#BE500D", "endometriosis" = "#633548")
+
+# PCoA CON 3 GRUPOS CLÍNICOS
+ggplot(pcoa_df,
+       aes(x = PC1,
+           y = PC2,
+           color = Group)) +
+  geom_point(size = 5) +
+  theme_classic() +
+  stat_ellipse(aes(group = Group), type = "norm", linetype = 2, size = 1) +
+  scale_color_manual(values=group_colors, 
+                     labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa"), 
+                     name = "Grupo clínico") +
+  labs(x=paste0("PC1 (",pc1_var,"%)"), y = paste0("PC2 (",pc2_var,"%)"), fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size =12),
+        axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+        axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+        legend.title=element_text(size=15, face="bold"), 
+        legend.text = element_text(size=13))
+  # Exportación del gráfico en formato png  
+ggsave("PCOA_braycurtis_3.png", plot = last_plot(), 
+       width = 10, height = 10, dpi = 1000)
+
+# PCoA CON 2 GRUPOS CLÍNICOS
+ggplot(pcoa_df_2,
+       aes(x = PC1,
+           y = PC2,
+           color = Group)) +
+  geom_point(size = 5) +
+  theme_classic() +
+  stat_ellipse(aes(group = Group), type = "norm", linetype = 2, size = 1) +
+  scale_color_manual(values=group_colors, 
+                     labels = c("control" = "Control", "endometriosis" = "Endometriosis"), 
+                     name = "Grupo clínico") +
+  labs(x=paste0("PC1 (",pc1_var,"%)"), y = paste0("PC2 (",pc2_var,"%)"), fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size =12),
+        axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+        axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+        legend.title=element_text(size=15, face="bold"), 
+        legend.text = element_text(size=13))
+  # Exportación del gráfico en formato png 
+ggsave("PCOA_braycurtis_2.png", plot = last_plot(), 
+       width = 10, height = 10, dpi = 1000)
+```
+
+# # Test no paramétrico (PERMANOVA) para la comparación de las distancias de Bray-Curtis entre grupos clínicos. 
+```{r}
+# 3 grupos clínicos
+adonis2(dist_bray_curtis ~ clinical_cohort,
+        data = metadata_ready,
+        permutations = 999)
+# 2 grupos clínicos
+adonis2(dist_bray_curtis ~ clinical_cohort_2,
+        data = metadata_ready,
+        permutations = 999)
+```
+

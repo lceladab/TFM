@@ -1,0 +1,1160 @@
+## ANÁLISIS FUNCIONAL DEL MICROBIOMA MEDIANTE HUMAnN
+
+En este bloque se realiza un análisis funcional del microbioma a partir de la tabla de abundancias de vías metabólicas generada con HUMAnN.
+
+El flujo de trabajo incluye:
+- Importación y preprocesamiento de datos.
+- Integración y curado de metadatos clínicos.
+- Análisis exploratorio mediante PCA para evaluar la separación entre grupos clínicos.
+- Identificación de vías metabólicas diferenciales entre grupos mediante tests estadísticos no paramétricos.
+- Anotación funcional de enzimas utilizando bases de datos como KEGG.
+- Representación gráfica de funciones relevantes.
+- Análisis de contribución funcional por especie mediante gráficos apilados.
+
+Este análisis permite caracterizar diferencias funcionales del microbioma entre grupos y explorar su posible relación con variables clínicas y hormonales.
+
+# Instalar paquetes necesarios y cargar librerías
+```{r}
+install.packages("tidyverse")
+install.packages("pheatmap")
+install.packages("vegan")
+
+library(tidyverse)
+library(pheatmap)
+library(vegan)
+```
+
+# Definir directorio de trabajo
+```{r}
+directory <- "~/tfm_bioinfo/analysis/humann/"
+setwd(directory)
+getwd()
+```
+
+# Importar archivos necesarios
+```{r}
+# Tabla no estratificada de vías metabólicas (normalizada a abundancia relativa)
+pathways_relab <- read.table(
+  "~/tfm_bioinfo/analysis/humann/pathabundance_tables_relab/pathabundance_joined_relab_unstratified.tsv",
+  header=TRUE,
+  comment.char = "",
+  row.names = 1,
+  col.names = c("Pathways","SRR30543090","SRR30543092","SRR30543093","SRR30543094",
+                "SRR30543095","SRR30543096","SRR30543097","SRR30543098","SRR30543099",
+                "SRR30543100","SRR30543101","SRR30543103","SRR30543104","SRR30543105",
+                "SRR30543106","SRR30543107","SRR30543108","SRR30543109","SRR30543110",
+                "SRR30543111","SRR30543112","SRR30543114","SRR30543115","SRR30543116",
+                "SRR30543117","SRR30543118"),
+  sep="\t"
+)
+
+# Cargar metadatos
+metadata <- read.table(
+  "~/tfm_bioinfo/metadata/metadata_samples_groups.txt", 
+  sep="\t", 
+  header=TRUE,
+  row.names = 1,
+  )
+```
+
+# Modificación de variables de metadatos
+```{r}
+# Variables binarias:
+  # Antibióticos
+metadata$antibiotics <- factor(
+  metadata$antibiotics,
+  levels = c(0,1),
+  labels = c("No", "Yes")
+)
+  # Endometrioma
+metadata$endometrioma <- factor(
+  metadata$endometrioma,
+  levels = c(0,1),
+  labels = c("No", "Yes")
+)
+  # Endometriosis peritoneal
+metadata$peritoneal_endo <- factor(
+  metadata$peritoneal_endo,
+  levels = c(0,1),
+  labels = c("No", "Yes")
+)
+  # Inflamación 
+metadata$inflammatory_conditions <- factor(
+  metadata$inflammatory_conditions,
+  levels = c(0,1),
+  labels = c("No", "Yes")
+)
+  # Fase del ciclo
+metadata$cycle_phase <- factor(
+  metadata$cycle_phase,
+  levels = c(0,1),
+  labels = c("Folicullar", "Mid-luteal")
+)
+
+# Variables discretas
+  # cycle_length
+metadata$cycle_length <- as.numeric(metadata$cycle_length)
+  # age
+metadata$age <- as.numeric(metadata$age)
+
+# Variables continuas
+  # BMI
+metadata$BMI <- as.numeric(gsub(",", ".", metadata$BMI))
+  # LH
+metadata$LH <- as.numeric(gsub(",", ".", metadata$LH))
+  # FSH
+metadata$FSH <- as.numeric(gsub(",", ".", metadata$FSH))
+  # insulin 
+metadata$insulin <- as.numeric(gsub(",", ".", metadata$insulin))
+  # progesterone
+metadata$progesterone <- as.numeric(gsub(",", ".", metadata$progesterone))
+  # oestradiol 
+metadata$oestradiol <- as.numeric(gsub(",", ".", metadata$oestradiol))
+
+# Subconjunto de metadatos para análisis comparativos entre 2 grupos clínicos específicos (control y endometriosis severa)
+metadata_subset <- metadata[metadata$group %in% c("control", "severe"), ]
+```
+
+# Preprocesamiento
+```{r}
+# Filtrar rutas metabólicas de baja abundancia (<0.0001) para reducir el ruido y centrarse en aquellas con una contribución relevante.
+pathways_relab_filtered <- pathways_relab[rowMeans(pathways_relab) > 0.0001,]
+
+# Transformación logarítmica para mejorar visualización
+pathways_relab_log <- log10(pathways_relab_filtered + 1e-6)
+```
+
+# Análisis de componentes principales (PCA) sobre las abundancias relativas de rutas para evaluar si los grupos clínicos se separan funcionalmente
+```{r}
+# Filtrado de rutas cuya desviación estándar es 0, ya que no aportan información para el PCA (todas las muestras tienen el mismo valor)
+pathways_filtered <- pathways_relab_log[
+  apply(pathways_relab_log, 1, sd) > 0, 
+]
+
+# Subconjunto de datos (comparación especial control vs endometriosis severa)
+pathways_subset <- pathways_relab_log[, rownames(metadata_subset)]
+# Se vuelve a aplicar el filtrado porque al reducir el número de muestras, algunas rutas pueden volverse constantes
+pathways_subset_filtered <- pathways_subset[
+  apply(pathways_subset, 1, sd) > 0,
+]
+
+# PCA para la comparación de 3 grupos clínicos (control, endometriosis leve y endometriosis severa)
+
+  # Se traspone la matriz porque prcomp espera muestras en filas y variables en columnas
+  # scale=TRUE estandariza las variables (media = 0, sd = 1)
+pca <- prcomp(t(pathways_filtered), scale=TRUE)
+
+  # Se combinan los resultados del PCA (scores) con los metadatos
+pca_df <- data.frame(pca$x, metadata)
+
+  # Se crea una etiqueta corta de cada muestra (últimos caracteres del nombre) - útil para visualización
+pca_df$sample_short <- 
+  substr(rownames(pca_df), 
+         nchar(rownames(pca_df)) - 2, 
+         nchar(rownames(pca_df)))
+
+  # Se define el orden de los niveles del factor "group" para controlar la visualización
+pca_df$group <- factor(pca_df$group, levels = c("control", "mild", "severe"))
+
+# PCA de un subset específico - comparación de 2 grupos clínicos (control y endometriosis severa) - se repite el procedimiento anterior
+pca_subset <- prcomp(t(pathways_subset), scale=TRUE)
+pca_df_subset <- data.frame(pca_subset$x, metadata_subset)
+pca_df_subset$sample_short <- 
+  substr(rownames(pca_df_subset), 
+         nchar(rownames(pca_df_subset)) - 2, 
+         nchar(rownames(pca_df_subset)))
+
+```
+
+
+# Representación gráfica del PCA
+```{r}
+# Paleta de colores y etiquetas empleadas
+group_colors <- c("control" = "#9BB874", "mild" = "#EBBA73", "severe" = "#BE500D", "endometriosis" = "#633548")
+
+my_labels <- c(
+  "control" = "Control",
+  "mild"    = "Endometriosis leve",
+  "severe"  = "Endometriosis severa",
+  "endometriosis" = "Endometriosis"
+)
+
+# PCA visualizando 3 grupos clínicos (controles, endometriosis leve y endometriosis severa)
+pc1_var <- round(summary(pca)$importance[2, "PC1"] * 100, 1)
+pc2_var <- round(summary(pca)$importance[2, "PC2"] * 100, 1)
+
+ggplot(pca_df, aes(PC1, PC2, color=group)) +
+  geom_point(size=4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=group_colors, labels = my_labels, name = "Grupo clínico") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x = element_text(size = 15),
+        axis.text.y = element_text(size =15),
+        axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+        axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+        legend.title = element_text(size=20, face="bold"),
+        legend.text = element_text(size=18))
+
+  # Exportación del gráfico en formato png
+ggsave("PCA_pathabundance_3grupos.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+
+# PCA visualizando 2 grupos clínicos (control y endometriosis)
+ggplot(pca_df, aes(PC1, PC2, color=group_2)) +
+  geom_point(size=4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=group_colors, labels = my_labels, name = "Grupo clínico") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, size = 1) + 
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x = element_text(size = 15),
+        axis.text.y = element_text(size =15),
+        axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+        axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+        legend.title = element_text(size=20, face="bold"),
+        legend.text = element_text(size=18))
+
+  # Exportación del gráfico en formato png
+ggsave("PCA_pathabundance_2grupos.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+
+# PCA entre un subset específico (control y endometriosis severa)
+pc1_var_subset <- round(summary(pca_subset)$importance[2, "PC1"] * 100, 1)
+pc2_var_subset <- round(summary(pca_subset)$importance[2, "PC2"] * 100, 1)
+
+ggplot(pca_df_subset, aes(PC1, PC2, color=group)) +
+  geom_point(size=4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=group_colors, labels = my_labels, name = "Grupo clínico") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, size = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var_subset,"%)"),
+    y = paste0("PC2 (",pc2_var_subset,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x = element_text(size = 15),
+        axis.text.y = element_text(size =15),
+        axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+        axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+        legend.title = element_text(size=20, face="bold"),
+        legend.text = element_text(size=18))
+
+  # Exportación del gráfico en formato png
+ggsave("PCA_pathabundance_control_severo.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+```
+
+
+# Integración de variables de metadatos con PCA (3 grupos clínicos): permite evaluar si la variable clínica influye en la distribución de las muestras
+```{r}
+# El dataframe del PCA (pca_df) contiene las variables de metadatos correspondientes a cada muestra
+pca_df
+
+# Se calcula el porcentaje de varianza explicada por PC1 y PC2 (útil para etiquetar los ejes en los gráficos)
+pc1_var <- round(summary(pca)$importance[2, "PC1"] * 100, 1)
+pc2_var <- round(summary(pca)$importance[2, "PC2"] * 100, 1)
+
+# Paleta de colores empleada para variables binarias
+variables_colors <- c("Yes" = "#EEA43A", "No" = "#3273BC", "NA" = "#EBEBEB")
+
+# PCA coloreado por uso de antibióticos
+ggplot(pca_df, aes(PC1, PC2, color = antibiotics)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Antibióticos") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_antibiotics.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por presencia de endometrioma
+ggplot(pca_df, aes(PC1, PC2, color = endometrioma)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Endometrioma") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_endometrioma.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por endometriosis peritoneal
+ggplot(pca_df, aes(PC1, PC2, color = peritoneal_endo)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Endometriosis peritoneal") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_endoperitoneal.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por condiciones inflamatorias
+ggplot(pca_df, aes(PC1, PC2, color = inflammatory_conditions)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Inflamación") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_inflammation.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# Colores específicos por fase del ciclo
+variables_colors_2 <- c("Folicullar" = "#EEA43A", "Mid-luteal" = "#3273BC", "NA" = "#EBEBEB")
+
+# PCA coloreado por fase del ciclo menstrual
+ggplot(pca_df, aes(PC1, PC2, color = cycle_phase)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors_2, labels = my_labels, name = "Fase del ciclo") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_cyclephase.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# A partir de aquí se grafican variables continuas, por lo que se emplea un gradiente de color
+# PCA coloreado por duración del ciclo
+ggplot(pca_df, aes(PC1, PC2, color = cycle_length)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Días de ciclo") +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_cyclelength.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por edad
+ggplot(pca_df, aes(PC1, PC2, color = age)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Edad") +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_age.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por índice de masa corporal (BMI)
+ggplot(pca_df, aes(PC1, PC2, color = BMI)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "BMI") +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_BMI.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por niveles hormonales (LH, FSH, progesterona, estradiol)
+# Permite explorar asociaciones entre perfil funcional del microbioma y estado hormonal
+ggplot(pca_df, aes(PC1, PC2, color = LH)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "LH (IU/L)") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_LH.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+ggplot(pca_df, aes(PC1, PC2, color = FSH)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "FSH (U/L)") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_FSH.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+ggplot(pca_df, aes(PC1, PC2, color = progesterone)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Progesterona (nmol/L)") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_progesterone.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+ggplot(pca_df, aes(PC1, PC2, color = oestradiol)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Oestradiol (pmol/L)") +
+  stat_ellipse(aes(group = group), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_oestradiol.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+```
+
+# Integración de variables de metadatos con PCA (2 grupos clínicos): permite evaluar si la variable clínica influye en la distribución de las muestras
+```{r}
+# El dataframe del PCA (pca_df) contiene las variables de metadatos correspondientes a cada muestra
+pca_df
+
+# Se calcula el porcentaje de varianza explicada por PC1 y PC2 (útil para etiquetar los ejes en los gráficos)
+pc1_var <- round(summary(pca)$importance[2, "PC1"] * 100, 1)
+pc2_var <- round(summary(pca)$importance[2, "PC2"] * 100, 1)
+
+# Paleta de colores empleada para variables binarias
+variables_colors <- c("Yes" = "#EEA43A", "No" = "#3273BC", "NA" = "#EBEBEB")
+
+# PCA coloreado por uso de antibióticos
+ggplot(pca_df, aes(PC1, PC2, color = antibiotics)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Antibióticos") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_antibiotics_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por presencia de endometrioma
+ggplot(pca_df, aes(PC1, PC2, color = endometrioma)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Endometrioma") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_endometrioma_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por endometriosis peritoneal
+ggplot(pca_df, aes(PC1, PC2, color = peritoneal_endo)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Endometriosis peritoneal") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_endoperitoneal_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por condiciones inflamatorias
+ggplot(pca_df, aes(PC1, PC2, color = inflammatory_conditions)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors, labels = my_labels, name = "Inflamación") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_inflammation_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# Colores específicos por fase del ciclo
+variables_colors_2 <- c("Folicullar" = "#EEA43A", "Mid-luteal" = "#3273BC", "NA" = "#EBEBEB")
+
+# PCA coloreado por fase del ciclo menstrual
+ggplot(pca_df, aes(PC1, PC2, color = cycle_phase)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample_short), vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  scale_color_manual(values=variables_colors_2, labels = my_labels, name = "Fase del ciclo") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_cyclephase_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# A partir de aquí se grafican variables continuas, por lo que se emplea un gradiente de color
+# PCA coloreado por duración del ciclo
+ggplot(pca_df, aes(PC1, PC2, color = cycle_length)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Días de ciclo") +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_cyclelength_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por edad
+ggplot(pca_df, aes(PC1, PC2, color = age)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Edad") +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_age_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por índice de masa corporal (BMI)
+ggplot(pca_df, aes(PC1, PC2, color = BMI)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "BMI") +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_BMI_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+# PCA coloreado por niveles hormonales (LH, FSH, progesterona, estradiol)
+# Permite explorar asociaciones entre perfil funcional del microbioma y estado hormonal
+ggplot(pca_df, aes(PC1, PC2, color = LH)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "LH (IU/L)") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_LH_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+ggplot(pca_df, aes(PC1, PC2, color = FSH)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "FSH (U/L)") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_FSH_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+ggplot(pca_df, aes(PC1, PC2, color = progesterone)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Progesterona (nmol/L)") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_progesterone_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+
+ggplot(pca_df, aes(PC1, PC2, color = oestradiol)) +
+  geom_point(size = 4) +
+  scale_color_gradient(low = "blue", high = "orange",  na.value = "#EBEBEB", name = "Oestradiol (pmol/L)") +
+  stat_ellipse(aes(group = group_2), type = "norm", linetype = 2, linewidth = 1) +
+  geom_text(aes(label = sample_short), color="grey", vjust = -1, size = 7, face="bold", show.legend = FALSE) +
+  labs (
+    x = paste0("PC1 (",pc1_var,"%)"),
+    y = paste0("PC2 (",pc2_var,"%)"),
+    color = "group") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size =15),
+    axis.title.y = element_text(size = 25, face = "bold", margin = margin(r = 10)),
+    axis.title.x = element_text(size = 25, face = "bold", margin = margin(t = 10)),
+    legend.title = element_text(size=20, face="bold"),
+    legend.text = element_text(size=18),
+    legend.position = "right")
+  # Exportación del gráfico en formato png
+ggsave("PCA_oestradiol_2.png", plot = last_plot(),
+       width = 12, height = 10, dpi = 1000)
+```
+
+
+# Análisis diferencial entre grupos clínicos
+```{r}
+# Variable de agrupación (3 grupos: control, leve, severa)
+groups <- metadata$group
+
+# Para cada ruta metabólica (fila), se aplica un test de Kruskal-Wallis (no paramétrico, adecuado para datos que no siguen distribución normal)
+pvalues <- apply(pathways_filtered, 1, function(x){
+  kruskal.test(x ~ groups)$p.value
+})
+
+# Corrección por múltiples comparaciones (FDR)
+p_adj <- p.adjust(pvalues, method="fdr")
+
+# Tabla resumen con los resultados del análisis diferencial
+results <- data.frame(
+  Pathway = rownames(pathways_filtered),
+  pvalue = pvalues,
+  FDR = p_adj)
+
+# Variable de agrupación (2 grupos: control y endometriosis)
+groups_2 <- metadata$group_2
+
+# Mismo procedimiento: test de Kruskal-Wallis y corrección FDR
+pvalues_2 <- apply(pathways_filtered, 1, function(x){
+  kruskal.test(x ~ groups_2)$p.value
+})
+p_adj_2 <- p.adjust(pvalues_2, method="fdr")
+
+# Tabla resumen con los resultados del análisis diferencial 2
+results_2 <- data.frame(
+  Pathway = rownames(pathways_filtered),
+  pvalue = pvalues_2,
+  FDR = p_adj_2)
+
+# Comparaciones por pares: se realizan tests de Wilcoxon entre cada par de grupos
+pairwise_results <- lapply(1:nrow(pathways_filtered), function(i){
+  # Valores de abundancia para una familia génica concreta
+  x <- as.numeric(pathways_filtered[i, ])
+  # Test de Wilcoxon por pares con corrección FDR
+  pw <- pairwise.wilcox.test(x, groups, p.adjust.method = "fdr")
+  # Convertir matriz de p-valores a formato largo (tidy)
+  df <- as.data.frame(as.table(pw$p.value))
+  # Renombrar columnas
+  colnames(df) <- c("group1", "group2", "pvalue")
+  # Añadir identificador de la familia génica (EC)
+  df$Gene_family <- rownames(pathways_filtered)[i]
+  df
+})
+
+# Dataframe resumen con todos los resultados
+pairwise_results <- do.call(rbind, pairwise_results)
+```
+
+
+# Selección de rutas candidatas: enfoque exploratorio
+```{r}
+# Para ambas comparaciones, se filtra por significancia (p-valor < 0.05 y FDR permisivo)
+candidates <- results[results$pvalue < 0.1,] 
+candidates_2 <- results_2[results_2$pvalue < 0.1,] 
+
+write.csv(candidates, "candidates_paths.csv")
+write.csv(candidates_2, "candidates2_paths.csv")
+```
+
+
+# Barplots de abundancia relativa (3 grupos clínicos)
+```{r}
+# Generar lista para guardar los gráficos
+plots <- list()
+
+for (i in 1:2) {
+  # Código de la ruta metabólica
+  path_code <- candidates$Pathway[i]
+  # Nombre de la ruta metabólica (solo el primero si hay varios separados por ';')
+  path_name <- strsplit(candidates$Pathway[i], ":")[[1]][1]
+  # Se extraen valores de abundancia para esa ruta en todas las muestras
+  values <- as.numeric(pathways_filtered[path_code,])
+  # Dataframe con abundancia + grupo para ggplot
+  df <- data.frame(
+    value = values,
+    group = metadata$group
+  )
+  # Se genera boxplot con puntos individuales (jitter)
+  plots[[i]] <- ggplot(df, aes(x = group, y = value, fill = group)) +
+    # Boxplot sin mostrar outliers (para evitar duplicarlos con jitter)
+    geom_boxplot(outlier.shape = NA) + 
+    # Puntos individuales (se corresponden a cada muestra)
+    geom_jitter(width = 0.15, size = 2, color = "grey60", alpha = 0.6) +
+    # Colores por grupo
+    scale_fill_manual(values = group_colors) + 
+    # Personalizar etiquetas eje X
+    scale_x_discrete(labels = my_labels) +
+    # Título con nombre de la ruta metabólica
+    ggtitle(path_name) + 
+    # Estética
+    theme_bw() + 
+    theme(axis.title = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),   
+          plot.title = element_text(size = 15,  face = "bold"),
+          legend.position = "none")
+}
+
+plots
+```
+
+
+# Barplots de abundancia relativa (2 grupos clínicos)
+```{r}
+# Se repite el procedimiento anterior
+plots_2 <- list()
+
+for (i in 1:2) {
+  path_code <- candidates_2$Pathway[i]
+  path_name <- strsplit(candidates_2$Pathway[i], ":")[[1]][1]
+  values <- as.numeric(pathways_filtered[path_code,])
+  df <- data.frame(
+    value = values,
+    group = metadata$group_2
+  )
+  plots_2[[i]] <- ggplot(df, aes(x = group, y = value, fill = group)) +
+    geom_boxplot(outlier.shape = NA) + 
+    geom_jitter(width = 0.15, size = 2, color = "grey60", alpha = 0.6) +
+    scale_fill_manual(values = group_colors) + 
+    scale_x_discrete(labels = my_labels) +
+    ggtitle(path_name) + 
+    theme_bw() + 
+    theme(axis.title = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),   
+          plot.title = element_text(size = 15,  face = "bold"),
+          legend.position = "none")
+}
+
+plots_2
+```
+
+# Agrupación de barplots en un solo archivo
+```{r}
+library(patchwork)
+
+wrap_plots(plots) +
+  plot_annotation(
+  title = "Abundancia relativa de rutas más significativas",
+  theme = theme(plot.title = element_text(size = 25, face = "bold"))
+  ) &
+labs(y=expression(log[10]("Abundancia relativa"))
+     ) &
+theme(
+  axis.title.y = element_text(size=12))
+
+  # Exportación en formato png
+ggsave("barplots_3grupos.png", plot = last_plot(),
+       width = 10, height = 10, dpi = 1000)
+
+wrap_plots(plots_2,) +
+  plot_annotation(
+    title = "Abundancia relativa de rutas más significativas",
+    theme = theme(plot.title = element_text(size = 25, face = "bold"))
+    ) &
+labs(y=expression(log[10]("Abundancia relativa"))
+     ) &
+theme(
+  axis.title.y = element_text(size=12))
+
+  # Exportación en formato png
+ggsave("barplots_2grupos.png", plot = last_plot(),
+       width = 10, height = 10, dpi = 1000)
+```
+# Análisis de contribución funcional por especie (stacked barplots)
+```{r}
+library(tidyverse)
+
+# Cargar tabla de abundancia estratificada (Pathway | especie), donde cada fila representa una ruta metabólica contribuida por una especie concreta
+df_contribution <- read.delim("~/tfm_bioinfo/analysis/humann/pathabundance_tables_relab/pathabundance_joined_relab_stratified.tsv", header = TRUE, row.names = 1, check.names = FALSE)
+
+# Convertir la matriz a formato largo (tidy). Ahora cada fila es (feature = Pathway|Species, Sample, Abundance)
+df_contribution_long <- df_contribution %>%
+  rownames_to_column("feature") %>%
+  pivot_longer(-feature, names_to = "Sample", values_to = "Abundance")
+
+# Separar la columna "feature" en Pathway (ruta metabólica) y "Species" (taxón que contribuye a esa función)
+df_contribution_long <- df_contribution_long %>%
+  separate(feature, into = c("Pathway", "Species"), sep = "\\|")
+
+# Seleccionar las rutas de interés previamente identificadas y eliminar anotaciones no clasificadas
+pathways <- c("COA-PWY: coenzyme A biosynthesis I (prokaryotic)", "PWY-7851: coenzyme A biosynthesis II (eukaryotic)", "PWY-5695: inosine 5-phosphate degradation 0.000249825 0 0 0 0 0 0 0 0 0 0 0 0.000203761 2.8579e-05 0 0 0 0 0 0 0 5.5727e-05 0 0 0.000248551 0 PWY-5873: ubiquinol-7 biosynthesis (late decarboxylation) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5.45926e-05 0 0 0 0 PWY-5910: superpathway of geranylgeranyldiphosphate biosynthesis I (via mevalonate) 0 0 0 0 0 0 0 0 0 0 0 0 2.5384e-05 0 0 0 0 0 0 0 0 0 0 0 0 0 PWY-5913: partial TCA cycle (obligate autotrophs) 0 0 0 0 0 0 0 0 0 0 0 0 2.44337e-05 0 0 0 0 0 0 0 0 0 0 0 0 0 PWY-5941: glycogen degradation II 0.000229199 0.000484318 0 0 0 0.000999787 0 0 0.00101071 0 0 0 0.00016447 0 0 0 0 3.05597e-05 0 0 0 0 0 0 0.00155841 0.000632413 PWY-5973: cis-vaccenate biosynthesis 5.89315e-05 0 0 0 0 0 0 0 0 0 0 3.83629e-05 0.000234227 2.96775e-05 0 0 0.000174147 0 0 0 0 4.4083e-05 0 0 0.000113103 0 PWY-5981: CDP-diacylglycerol biosynthesis III 4.637e-05 0 0.000251936 0 0 0 0.000686277 0 0 0 0 0.000134088 0 0 0 0 6.85753e-05 0.00042954 0 0 0 0.000597991 0 0 0 0 PWY-5989: stearate biosynthesis II (bacteria and plants) 0 0 0 0 0 0 0 0 0 0 0 0 4.54781e-05 0 0 0 0 0 0 0 0 5.08157e-05 0 0 5.46487e-05 0 PWY-6121: 5-aminoimidazole ribonucleotide biosynthesis I 0.000255545 0.000360781 0 2.97371e-05 0 0.000151841 0 0 0.000325716 0 0 0 0.000149008 0 0 0 8.71908e-05 4.88267e-05 0 0 0 0 0 0 0.000906276 0 PWY-6122: 5-aminoimidazole ribonucleotide biosynthesis II 0.000266719 0.000399969 0 2.64583e-05 0 0.000679971 0 0 0.000439652 0 0 0 0.000171208 1.35852e-05 0 0 8.11716e-05 4.95572e-05 0 0 0 0 0 0 0.000926845 0.00029098 PWY-6123: inosine-5-phosphate biosynthesis I")
+df_contribution_path <- df_contribution_long %>%
+  filter(!grepl("unclassified", Species, ignore.case = TRUE)) %>%
+  filter(Pathway %in% pathways)
+
+# Integrar metadatos:
+  # Limpiar el nombre de la muestra
+df_contribution_path$Sample <- sub("_.*", "", df_contribution_path$Sample)
+  # Asignar grupo clínico
+df_contribution_path_2 <- df_contribution_path
+df_contribution_path$Group <- metadata$group[match(df_contribution_path$Sample, rownames(metadata))]
+df_contribution_path_2$Group <- metadata$group_2[match(df_contribution_path_2$Sample, rownames(metadata))]
+
+# 3 GRUPOS CLÍNICOS
+# Calcular abundancia total por ruta + grupo clínico + especie para ver qué especies contribuyen más en cada grupo
+df_contribution_sum <- df_contribution_path %>%
+  group_by(Pathway, Group, Species) %>%
+  summarise(Abundance = sum(Abundance), .groups = "drop")
+
+# Seleccionar las 5 especies más abundantes por cada ruta
+top_species_contribution <- df_contribution_sum %>%
+  group_by(Pathway, Species) %>%
+  summarise(total = sum(Abundance), .groups = "drop") %>%
+  group_by(Pathway) %>%
+  slice_max(total, n = 5)
+
+# Filtrar dataset para mantener solo las especies principales
+df_stackedplot <- df_contribution_sum %>%
+  filter(Species %in% top_species_contribution$Species)
+
+# Agrupar el resto de especies en la categoría ("Otros") para no perder información, pero simplificar la visualización
+df_other <- df_contribution_sum %>%
+  filter(!Species %in% top_species_contribution$Species) %>%
+  group_by(Pathway, Group) %>%
+  summarise(Abundance = sum(Abundance), .groups = "drop") %>%
+  mutate(Species = "Otros")
+
+# Combinar especies principales + "Otros"
+df_stackedplot <- bind_rows(df_stackedplot, df_other)
+
+# Paleta de colores empleada
+palette <- c(
+  "#415A77", "#6E9FA4", "#C3DBD2", "#C1D399", "#9D894B",
+  "#DCBFAA", "#ECBB73", "#C67555", "#562E3E", "#AE779D",
+  "#D1BBD2"
+)
+
+# Etiquetas interpretables para las rutas metabólicas (nombres)
+pathways_labels <- c(
+  "COA-PWY: coenzyme A biosynthesis I (prokaryotic)" = "coenzyme A biosynthesis (prokaryotic)",
+  "PWY-7851: coenzyme A biosynthesis II (eukaryotic)" = "coenzyme A biosynthesis II (eukaryotic)",
+  "PWY-5695: inosine 5-phosphate degradation 0.000249825 0 0 0 0 0 0 0 0 0 0 0 0.000203761 2.8579e-05 0 0 0 0 0 0 0 5.5727e-05 0 0 0.000248551 0 PWY-5873: ubiquinol-7 biosynthesis (late decarboxylation) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5.45926e-05 0 0 0 0 PWY-5910: superpathway of geranylgeranyldiphosphate biosynthesis I (via mevalonate) 0 0 0 0 0 0 0 0 0 0 0 0 2.5384e-05 0 0 0 0 0 0 0 0 0 0 0 0 0 PWY-5913: partial TCA cycle (obligate autotrophs) 0 0 0 0 0 0 0 0 0 0 0 0 2.44337e-05 0 0 0 0 0 0 0 0 0 0 0 0 0 PWY-5941: glycogen degradation II 0.000229199 0.000484318 0 0 0 0.000999787 0 0 0.00101071 0 0 0 0.00016447 0 0 0 0 3.05597e-05 0 0 0 0 0 0 0.00155841 0.000632413 PWY-5973: cis-vaccenate biosynthesis 5.89315e-05 0 0 0 0 0 0 0 0 0 0 3.83629e-05 0.000234227 2.96775e-05 0 0 0.000174147 0 0 0 0 4.4083e-05 0 0 0.000113103 0 PWY-5981: CDP-diacylglycerol biosynthesis III 4.637e-05 0 0.000251936 0 0 0 0.000686277 0 0 0 0 0.000134088 0 0 0 0 6.85753e-05 0.00042954 0 0 0 0.000597991 0 0 0 0 PWY-5989: stearate biosynthesis II (bacteria and plants) 0 0 0 0 0 0 0 0 0 0 0 0 4.54781e-05 0 0 0 0 0 0 0 0 5.08157e-05 0 0 5.46487e-05 0 PWY-6121: 5-aminoimidazole ribonucleotide biosynthesis I 0.000255545 0.000360781 0 2.97371e-05 0 0.000151841 0 0 0.000325716 0 0 0 0.000149008 0 0 0 8.71908e-05 4.88267e-05 0 0 0 0 0 0 0.000906276 0 PWY-6122: 5-aminoimidazole ribonucleotide biosynthesis II 0.000266719 0.000399969 0 2.64583e-05 0 0.000679971 0 0 0.000439652 0 0 0 0.000171208 1.35852e-05 0 0 8.11716e-05 4.95572e-05 0 0 0 0 0 0 0.000926845 0.00029098 PWY-6123: inosine-5-phosphate biosynthesis I" = "inosine 5-phosphate degradation"
+)
+
+# Representación gráfica: barras apiladas que representan la contribución de cada especie a cada EC, y la comparación entre grupos clínicos. Se hace una gráfica por cada EC seleccionada.
+ggplot(df_stackedplot, aes(x = Group, y = Abundance, fill = Species)) +
+  geom_bar(stat = "identity", color = "black", linewidth = 0.1) +
+  facet_wrap(~Pathway, scales = "free_y", labeller = as_labeller(pathways_labels)) +
+  scale_x_discrete(labels = my_labels) +
+  theme_minimal() +
+  scale_fill_manual(values = palette) +
+  labs(x = "", y = "Abundancia relativa", fill = "Especies") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        axis.title = element_text(size = 16, face="bold"),
+        legend.title = element_text(size=13, face="bold"),
+        strip.text = element_text(size = 10, face="bold"))
+ggsave("stacked_plot_pathways.png", plot = last_plot(),
+       width = 12, height = 8, dpi = 1000)
+
+# 2 GRUPOS CLÍNICOS
+df_contribution_sum_2 <- df_contribution_path_2 %>%
+  group_by(Pathway, Group, Species) %>%
+  summarise(Abundance = sum(Abundance), .groups = "drop")
+
+top_species_contribution_2 <- df_contribution_sum_2 %>%
+  group_by(Pathway, Species) %>%
+  summarise(total = sum(Abundance), .groups = "drop") %>%
+  group_by(Pathway) %>%
+  slice_max(total, n = 5)
+
+df_stackedplot_2 <- df_contribution_sum_2 %>%
+  filter(Species %in% top_species_contribution_2$Species)
+
+df_other_2 <- df_contribution_sum_2 %>%
+  filter(!Species %in% top_species_contribution_2$Species) %>%
+  group_by(Pathway, Group) %>%
+  summarise(Abundance = sum(Abundance), .groups = "drop") %>%
+  mutate(Species = "Otros")
+
+df_stackedplot_2 <- bind_rows(df_stackedplot_2, df_other_2)
+
+ggplot(df_stackedplot_2, aes(x = Group, y = Abundance, fill = Species)) +
+  geom_bar(stat = "identity", color = "black", linewidth = 0.1) +
+  facet_wrap(~Pathway, scales = "free_y", labeller = as_labeller(pathways_labels)) +
+  scale_x_discrete(labels = my_labels) +
+  theme_minimal() +
+  scale_fill_manual(values = palette) +
+  labs(x = "", y = "Abundancia relativa", fill = "Especies") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        axis.title = element_text(size = 16, face="bold"),
+        legend.title = element_text(size=13, face="bold"),
+        strip.text = element_text(size = 10, face="bold"))
+ggsave("stacked_plot_pathways_2.png", plot = last_plot(),
+       width = 12, height = 8, dpi = 1000)
+```
+
