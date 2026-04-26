@@ -13,3 +13,6 @@ En esta carpeta se encuentra el código generado en el lenguaje de programación
 
 * Carpeta "Python":
 En esta carpeta se encuentra el script en Python utilizado para extraer métricas de los archivos JSON generados por fastp y evaluar cuantitativamente el impacto del preprocesamiento.
+
+* Archivo merged_table.txt (Tabla S4):
+Matriz de abundancia generada mediante merge_metaphlan_tables.py que recoge las abundancias relativas (%) de los taxones identificados en cada muestra. 
