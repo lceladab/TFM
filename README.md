@@ -9,4 +9,7 @@ En esta carpeta encontramos los archivos run_fastp.sh, run_fastqc_inicial.sh, ru
 En esta carpeta también encontramos un ejemplo de resultados de MultiQC en una carpeta a parte.
 
 * Carpeta "R":
-En esta carpeta se encuentra el código generado en el lenguaje de programación R. Incluye diversity_alpha_index_R.rmd, diversity_beta_index.R.rmd (análisis taxonómico de diversidad), differential_pathways.rmd y differential_genefamilies.rmd (análisis funcional de los archivos resultantes de HUMAnN). 
+En esta carpeta se encuentra el código generado en el lenguaje de programación R. Incluye diversity_alpha_index_R.rmd, diversity_beta_index.R.rmd (análisis taxonómico de diversidad), differential_pathways.rmd y differential_genefamilies.rmd (análisis funcional de los archivos resultantes de HUMAnN).
+
+* Carpeta "Python":
+En esta carpeta se encuentra el script en Python utilizado para extraer métricas de los archivos JSON generados por fastp y evaluar cuantitativamente el impacto del preprocesamiento.
