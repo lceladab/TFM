@@ -1,0 +1,472 @@
+Este código se ha implementado para evaluar la diversidad alfa con archivos resultantes de MetaphIan. Se parte de la matriz de abundancia obtenida mediante merge_metaphlan_tables.py, ya filtrada, que reúne el nivel jerárquico "especie" y las respectivas abundancias relativas de todas las muestras. 
+
+# Instalación de paquetes necesarios
+```{r}
+# Repositorio CRAN
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+if(!require("vegan", quietly = TRUE))
+  install.packages("vegan")
+if(!require("tidyverse", quietly = TRUE))
+  install.packages("tidyverse")
+
+  # Bioconductor
+if(!require("phyloseq", quietly = TRUE))
+  BiocManager::install("phyloseq")
+```
+
+# Cargar librerías 
+```{r}
+library(vegan)
+library(tidyverse)
+library(phyloseq)
+```
+
+# Establecer directorio de trabajo
+```{r}
+setwd("../metaphian")
+```
+
+# Leer archivos necesarios, transformación a un formato adecuado y pre-filtrado
+```{r}
+# Tabla de abundancias de especies de metaphIan 
+otu_species <- read.table("merged_abundance_table_species.txt",
+                          header = TRUE,
+                          sep = "\t",
+                          row.names = 1, 
+                          check.names = FALSE)
+
+# Tabla de metadatos
+metadata <- read.table(
+  "../../metadata/metadata_samples_groups.txt", 
+  sep="\t", 
+  header=TRUE,
+  row.names = 1,
+)
+
+# Transformación a formato largo (tabla con especie, muestra y abundancia relativa)
+otu_species <- otu_species %>% rownames_to_column("Species")
+otu_species_long <- otu_species %>%
+  pivot_longer(-Species, names_to = "Sample", values_to = "Abundance")
+
+# Se seleccionan las 10 especies con mayor abundancia media en todas las muestras
+top_species <- otu_species_long %>%
+  group_by(Species) %>%
+  summarise(mean_abundance = mean(Abundance)) %>%
+  arrange(desc(mean_abundance)) %>%
+  slice(1:10) %>%
+  pull(Species)
+
+# Se agrupan el resto de especies en una categoría aparte ("otros")
+otu_species_long$Species <- ifelse(otu_species_long$Species %in% top_species, otu_species_long$Species, "Otros")
+
+# Se añade el grupo clínico a la tabla
+metadata <- metadata %>%
+  rownames_to_column("Sample")
+otu_species_long <- otu_species_long %>%
+  left_join(metadata, by = "Sample") %>%
+  group_by(group,Species) %>%
+  summarise(Abundance = mean(Abundance), .groups="drop") # 3 niveles
+otu_species_long_2 <- otu_species_long %>%
+  left_join(metadata, by = "Sample") %>%
+  group_by(group_2,Species) %>%
+  summarise(Abundance = mean(Abundance), .groups="drop") # 2 niveles
+
+# Se ordena la tabla por abundancia total 
+species_order <- otu_species_long %>%
+  group_by(Species) %>%
+  summarise(total = sum(Abundance)) %>%
+  arrange(total) %>%
+  pull(Species) # 3 niveles
+species_order_2 <- otu_species_long_2 %>%
+  group_by(Species) %>%
+  summarise(total = sum(Abundance)) %>%
+  arrange(desc(total)) %>%
+  pull(Species) # 2 niveles
+
+otu_species_long$Species <- factor(otu_species_long$Species, levels = species_order)
+otu_species_long_2$Species <- factor(otu_species_long_2$Species, levels = rev(species_order_2))
+```
+
+# Gráfico stacked plot: se representa el promedio de la abundandancia relativa de cada especie por muestra dentro de cada grupo clínico, tanto para la comparación de dos niveles (control y endometriosis), como de tres niveles (control, endometriosis leve y endometriosis severa)
+```{r}
+# Paleta de colores empleada
+palette <- c(
+  "#415A77","#6E9FA4",
+  "#562E3E","#C3DBD2",
+  "#AE779D", "#C67555",
+  "#D1BBD2","#89954D","#ECBB73",
+  "#C1D399", "#DCBFAA"
+)
+
+# COMPARACIÓN 3 NIVELES
+ggplot(otu_species_long, aes(x = group, y = Abundance, fill = Species)) + 
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  scale_fill_manual(values = rev(palette)) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa"
+  )) +
+  labs(x="", y = "Abundancia relativa", fill = "Especies") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        strip.text = element_text(size = 12, face="bold"),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("stacked_plot_metaphian.png", plot = last_plot(), 
+       width = 10, height = 8, dpi = 1000)
+
+# COMPARACIÓN 2 NIVELES
+ggplot(otu_species_long_2, aes(x = group_2, y = Abundance, fill = Species)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  scale_fill_manual(values = rev(palette)) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Abundancia relativa", fill = "Especies") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        strip.text = element_text(size = 12, face="bold"),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png  
+ggsave("stacked_plot_metaphian_2cohortes.png", plot = last_plot(), 
+       width = 8, height = 8, dpi = 1000)
+```
+
+# Tabla de abundancias a nivel de género: se filtra esta categoría a partir de la  matriz de abundancia obtenida mediante merge_metaphlan_tables.py, sin filtrar, que reúne todos los niveles jerárquicos y sus respectivas abundancias relativas de todas las muestras. 
+
+```{r}
+# Tabla de abundancias de metaphIan 
+otu_table <- read.table("merged_table.txt",
+                        header = TRUE,
+                        sep = "\t",
+                        row.names = 1, 
+                        check.names = FALSE)
+
+# Tabla de metadatos
+metadata <- read.table(
+  "../../metadata/metadata_samples_groups.txt", 
+  sep="\t", 
+  header=TRUE,
+  row.names = 1,
+)
+
+# Filtrar géneros: se eliminan aquellas categorías que lleguen a especie porque si no, se contabilizaría el doble en diversidad
+otu_genus <- otu_table[grepl("g__", rownames(otu_table)) & !grepl("s__", rownames(otu_table)), ]
+```
+
+
+# Cálculo de índices de diversidad alfa (Shannon y Simpson)
+```{r}
+shannon_species <- diversity(t(otu_species), index = "shannon")
+shannon_df_sp <- data.frame(Sample = names(shannon_species), shannon_sp = shannon_species)
+
+simpson_species <- diversity(t(otu_species), index = "simpson")
+simpson_df_sp <- data.frame(Sample = names(simpson_species), simpson_sp = simpson_species)
+
+shannon_genus <- diversity(t(otu_genus), index = "shannon")
+shannon_df_gen <- data.frame(Sample = names(shannon_genus), shannon_gen = shannon_genus)
+
+simpson_genus <- diversity(t(otu_genus), index = "simpson")
+simpson_df_gen <- data.frame(Sample = names(simpson_genus), simpson_gen = simpson_genus)
+```
+
+# Combinación de índices calculados con los metadatos
+```{r}
+metadata <- metadata %>%
+  rownames_to_column("Sample")
+metadata_index <- metadata %>% 
+  left_join(shannon_df_sp, by = "Sample") %>%
+  left_join(shannon_df_gen, by = "Sample") %>%
+  left_join(simpson_df_sp, by = "Sample") %>%
+  left_join(simpson_df_gen, by = "Sample") %>%
+  slice(-n())
+```
+
+
+# Representación del índice de diversidad Shannon mediante gráficos de cajas: este índice representa riqueza (número de especies presentes) y equitatividad (distribución uniforme de abundancias)
+```{r}
+# Paleta de colores empleada
+group_colors <- c("control" = "#9BB874", "mild" = "#EBBA73", "severe" = "#BE500D", "endometriosis" = "#633548")
+
+# NIVEL ESPECIE, 3 GRUPOS CLÍNICOS
+ggplot(metadata_index,
+       aes(x = group,
+           y = shannon_sp,
+           fill = group)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa"
+  )) +
+  labs(x="", y = "Índice de Shannon por especie", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("shannon_sp_3.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+
+# NIVEL ESPECIE, 2 GRUPOS CLÍNICOS
+ggplot(metadata_index,
+       aes(x = group_2,
+           y = shannon_sp,
+           fill = group_2)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa", "endometriosis" = "Endometriosis")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Índice de Shannon por especie", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("shannon_sp_2.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+
+# NIVEL GÉNERO, 3 GRUPOS CLÍNICOS
+ggplot(metadata_index,
+       aes(x = group,
+           y = shannon_gen,
+           fill = group)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Índice de Shannon por género", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("shannon_gen_3.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+
+# NIVEL GÉNERO, 2 GRUPOS CLÍNICOS
+ggplot(metadata_index,
+       aes(x = group_2,
+           y = shannon_gen,
+           fill = group_2)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa", "endometriosis" = "Endometriosis")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Índice de Shannon por género", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("shannon_gen_2.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+```
+
+# Representación del índice de diversidad Simpson mediante gráficos de cajas: este índice pondera principalmente la abundancia de especies dominantes, siendo menos sensible a especies raras
+```{r}
+# NIVEL ESPECIE, 3 GRUPOS CLÍNICOS
+ggplot(metadata_index,
+       aes(x = group,
+           y = simpson_sp,
+           fill = group)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Índice de Simpson por especie", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("simpson_sp_3.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+
+# NIVEL ESPECIE, 2 GRUPOS CLÍNICOS
+ggplot(metadata_index,
+       aes(x = group_2,
+           y = simpson_sp,
+           fill = group_2)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Índice de Simpson por especie", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("simpson_sp_2.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+
+# NIVEL GÉNERO, 3 GRUPOS CLÍNICOS
+ggplot(metadata_index,
+       aes(x = group,
+           y = simpson_gen,
+           fill = group)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Índice de Simpson por género", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+  # Exportación del gráfico en formato png 
+ggsave("simpson_gen_3.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+
+# NIVEL GÉNERO, 2 GRUPOS CLÍNICOS
+ ggplot(metadata_index,
+       aes(x = group_2,
+           y = simpson_gen,
+           fill = group_2)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1) +
+  theme_minimal() +
+  scale_fill_manual(values = group_colors,
+                    labels = c("control" = "Control", "mild" = "Endometriosis leve","severe" = "Endometriosis severa")) +
+  scale_x_discrete(labels = c(
+    "control" = "Control",
+    "mild" = "Endometriosis 
+    leve",
+    "severe" = "Endometriosis 
+    severa",
+    "endometriosis" = "Endometriosis"
+  )) +
+  labs(x="", y = "Índice de Simpson por género", fill = "Grupo clínico") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size =12, face = "bold"),
+        axis.text.y = element_text(size =10),
+        axis.title.y = element_text(size = 16, face = "bold", margin = margin(r = 10)),
+        legend.title=element_text(size=13, face="bold"), 
+        legend.text = element_text(size=11))
+   # Exportación del gráfico en formato png 
+ggsave("simpson_gen_2.png", plot = last_plot(), 
+       width = 7, height = 10, dpi = 1000)
+
+```
+
+# Tests no paramétricos para la comparación de índices de diversidad alfa. Se quiere evaluar si existe alguna diferencia entre al menos uno de los tres grupos clínicos (controles, endometriosis leve y endometriosis severa) mediante test de Kruskal-Wallis. En caso de existir diferencias, se podrían hacer comparaciones por pares para saber entre qué grupos hay diferencias significativas. Por otro lado, se quiere saber si hay diferencias teniendo en cuenta solo dos grupos clínicos (controles y endometriosis), utilizando test de Wilcoxon.
+```{r}
+# Definir lista de tests de Kruskal-Wallis (comparación de 3 niveles) y Wilcoxon (comparación de 2 niveles)
+tests_list <- list(
+  shannon_sp_3 = kruskal.test(shannon_sp ~ group, 
+                              data = metadata_index),
+  shannon_gen_3 = kruskal.test(shannon_gen ~ group, 
+                              data = metadata_index),
+  simpson_sp_3 = kruskal.test(simpson_sp ~ group, 
+                              data = metadata_index),
+  simpson_gen_3 = kruskal.test(simpson_gen ~ group, 
+                              data = metadata_index),
+  shannon_sp_2 = wilcox.test(shannon_sp ~ group_2, 
+                             data = metadata_index),
+  shannon_gen_2 = wilcox.test(shannon_gen ~ group_2,
+                              data = metadata_index),
+  simpson_sp_2 = wilcox.test(simpson_sp ~ group_2,
+                             data = metadata_index),
+  simpson_gen_2 = wilcox.test(simpson_gen ~ group_2,
+                              data = metadata_index)
+)
+
+# Extraer métricas de los estadísticos en un dataframe
+results_table <- data.frame(
+  Test = character(),
+  Statistic = numeric(),
+  P_value = numeric()
+) # crear dataframe vacío
+
+for(test_name in names(tests_list)){
+  test_obj <- tests_list[[test_name]]
+  stat_value <- unlist(test_obj$statistic)
+  p_value <- test_obj$p.value
+  
+  results_table <- rbind(
+    results_table,
+    data.frame(
+      Test = test_name,
+      Statistic = stat_value,
+      P_value = p_value
+    )
+  )
+}
+
+```

@@ -1,0 +1,147 @@
+## ANCOM-BC (Analysis of composition of microbiomes with bias correction)
+
+En este bloque se realiza un análisis de abundancia diferencial para identificar posibles cambios en taxones específicos entre grupos clínicos en endometriosis.
+
+El flujo de trabajo incluye:
+- Importación y preprocesamiento de datos.
+- Integración y curado de metadatos clínicos.
+- Análisis diferencial a nivel de especie y de género, utilizando dos y tres cohortes clínicas. - Corrección por comparaciones múltiples mediante Benjamini-hochberg. 
+
+
+# Instalar paquetes necesarios y cargar librerías
+```{r}
+  # Repositorio CRAN
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+if(!require("vegan", quietly = TRUE))
+  install.packages("vegan")
+if(!require("tidyverse", quietly = TRUE))
+  install.packages("tidyverse")
+  # Bioconductor
+if(!require("phyloseq", quietly = TRUE))
+  BiocManager::install("phyloseq")
+if(!require("ANCOMBC", quietly = TRUE))
+  BiocManager::install("ANCOMBC", force=TRUE)
+install.packages("CVXR")
+
+library(vegan)
+library(phyloseq)
+library(tidyverse)
+library(CVXR)
+library(ANCOMBC)
+```
+
+# Definir directorio de trabajo
+```{r}
+directory <- "~/tfm_bioinfo/analysis/metaphian/"
+setwd(directory)
+# Comprobar directorio de trabajo
+getwd()
+```
+
+# Importar archivos necesarios
+```{r}
+# Tabla de abundancias de MetaPhiAn
+otu_table <- read.table("merged_table.txt",
+                        header = TRUE,
+                        sep = "\t",
+                        row.names = 1, 
+                        check.names = FALSE)
+
+# Metadatos
+metadata <- read.table("../../metadata/metadata.txt", 
+                       header = TRUE, 
+                       sep = "\t", 
+                       fill = TRUE)
+metadata <- metadata[-nrow(metadata),]
+```
+
+# Filtrar tabla de abundancias por especie y género
+```{r}
+otu_species <- otu_table[grepl("s__", rownames(otu_table)), ]
+
+# Se eliminan los que lleguen a especie para no contabilizar el doble en diversidad
+otu_genus <- otu_table[grepl("g__", rownames(otu_table)) & !grepl("s__", rownames(otu_table)), ]
+```
+
+# Formatear las tablas (necesario para ANCOM)
+```{r}
+# Se trasponen y se ponen las filas como muestras
+otu_species_ancom <- as.data.frame(t(otu_species))
+otu_genus_ancom <- as.data.frame(t(otu_genus))
+rownames(metadata) <- metadata[, 18]
+```
+
+# Análisis diferencial: la función ancombc() sirve para detectar taxones cuya abundancia relativa cambia significativamente entre grupos. 
+```{r}
+# Comparación de tres grupos clínicos (control, endometriosis leve y endometriosis severa a nivel de especie -> objetivo: identificar si hay especies que cambian entre dichos grupos
+ancom_res_3 <- ancombc(
+  data = otu_species_ancom, # matriz de abundancias a nivel de especie
+  meta_data = metadata, # tabla con información clínica
+  formula = "clinical_cohort", # variable explicativa 
+  p_adj_method = "BH", # corrección por comparaciones múltiples
+  group = "clinical_cohort", # variable a utilizar para el contraste
+  taxa_are_rows = FALSE # las especies están en columnas
+)
+
+# Se repite para el resto de comparaciones
+# Comparación de dos grupos clínicos (control y endometriosis) a nivel de especie 
+ancom_res_2 <- ancombc(
+  data = otu_species_ancom,
+  meta_data = metadata,
+  formula = "clinical_cohort_2",
+  p_adj_method = "BH",
+  group = "clinical_cohort_2",
+  taxa_are_rows = FALSE
+)
+
+# Comparación de tres grupos clínicos (control, endometriosis leve y endometriosis severa) a nivel de género
+ancom_res_3_gen <- ancombc(
+  data = otu_genus_ancom,
+  meta_data = metadata,
+  formula = "clinical_cohort",
+  p_adj_method = "BH",
+  group = "clinical_cohort",
+  taxa_are_rows = FALSE
+)
+
+# Comparación de dos grupos clínicos (control y endometriosis) a nivel de género
+ancom_res_2_gen <- ancombc(
+  data = otu_genus_ancom,
+  meta_data = metadata,
+  formula = "clinical_cohort_2",
+  p_adj_method = "BH",
+  group = "clinical_cohort_2",
+  taxa_are_rows = FALSE
+)
+```
+
+# Recopilación de resultados: se filtran genes diferencialmente abundantes (q_val < 0.05, que son los p-valores ajustados por FDR-BH)
+```{r}
+  # 3 grupos, especie 
+res_sp3 <- as.data.frame(ancom_res_3$res)
+res_sp3$Taxon <- rownames(res_sp3)
+# Se filtran taxones diferencialmente abundantes en control vs endometriosis leve y/o control vs endometroisis severa
+sig_sp3 <- res_sp3 %>%
+  dplyr::filter(diff_abn.clinical_cohortmild == TRUE| diff_abn.clinical_cohortsevere == TRUE)
+
+  # 2 grupos, especie
+res_sp2 <- as.data.frame(ancom_res_2$res)
+res_sp2$Taxon <- rownames(res_sp2)
+sig_sp2 <- res_sp2 %>%
+  dplyr::filter(diff_abn.clinical_cohort_2endometriosis == TRUE)
+
+  # 3 grupos, género
+res_gen3 <- as.data.frame(ancom_res_3_gen$res)
+res_gen3$Taxon <- rownames(res_gen3)
+sig_gen3 <- res_gen3 %>%
+  dplyr::filter(diff_abn.clinical_cohortmild == TRUE| diff_abn.clinical_cohortsevere == TRUE)
+
+  # 2 grupos, género
+res_gen2 <- as.data.frame(ancom_res_2_gen$res)
+res_gen2$Taxon <- rownames(res_gen2)
+sig_gen2 <- res_gen2 %>%
+  dplyr::filter(diff_abn.clinical_cohort_2endometriosis == TRUE)
+```
+
+
