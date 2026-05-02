@@ -14,5 +14,8 @@ En esta carpeta se encuentra el script en Python utilizado para extraer métrica
 
 ## Carpeta "Results"
 En esta carpeta se encuentran archivos de resultados que no se pudieron incluir en anexos o formato Word.
-- Archivo merged_table.txt (Tabla S4): matriz de abundancia generada mediante merge_metaphlan_tables.py que recoge las abundancias relativas (%) de los taxones identificados en cada muestra.
-- Informes HTML de MultiQC: se pueden visualizar al descargarlos y abrirlos con un navegador. 
+- Archivo merged_table.txt (Tabla S3): matriz de abundancia generada mediante merge_metaphlan_tables.py que recoge las abundancias relativas (%) de los taxones identificados en cada muestra.
+- Informes HTML de MultiQC: resumen de los controles de calidad obtenidos a partir de los informes de FastQC. Se muestran las métricas principales, incluyendo estadísticas generales (nivel de duplicación, contenido GC, y número de secuencias), número de secuencias únicas y duplicadas por muestra, distribución de la calidad por secuencia, contenido de GC por secuencia, contenido de bases ambiguas, niveles de duplicación, contenido de adaptadores y un heatmap representando el estado global de calidad de las muestras. Ambos informes permiten evaluar la calidad inicial y final de las lecturas. Se pueden visualizar al descargarlos y abrirlos con un navegador. 
+
+## Otros archivos
+- Metadata.txt: metadatos asociados a las muestras incluidas en el estudio. La tabla recoge información técnica de secuenciación (identificadores SRA, BioProject, BioSample, plataforma, instrumento utilizado, número de lecturas y tamaño del archivo), así como variables biológicas y clínicas de los participantes (edad, índice de masa corporal o BMI, corte clínica, uso de antibióticos, presencia de endometrioma o endometriosis peritoneal, parámetros del ciclo menstrual y niveles hormonales. Esta información se utilizó para el análisis comparativo entre grupos. 
